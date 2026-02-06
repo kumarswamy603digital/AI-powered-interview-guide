@@ -20,7 +20,7 @@ A comprehensive interview preparation system that leverages AI to provide realis
 
 
 ### 🎥 Project Demo Video
-https://github.com/kumarswamy603digital/AI-powered-interview-guide/raw/main/demo.mp4
+https://github.com/user-attachments/assets/6d3b8ed9-1d27-4864-9763-235635add94c
 ---
 
 ## 📋 Table of Contents
