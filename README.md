@@ -21,8 +21,7 @@ A comprehensive interview preparation system that leverages AI to provide realis
 
 ### 🎥 Project Demo Video
 
-https://github.com/user-attachments/assets/6d3b8ed9-1d27-4864-9763-235635add94c
-
+https://app.heygen.com/videos/c1f722b187ce4994b553dc7f552c18b7
 ---
 
 ## 📋 Table of Contents
