@@ -1,4 +1,4 @@
-# 🎯 AI Interviewer Pro Max
+# 🎯 AI Interview Guide
 
 **Enterprise-Grade AI-Powered Mock Interview Platform**
 
