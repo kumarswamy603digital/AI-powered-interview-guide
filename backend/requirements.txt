@@ -6,3 +6,10 @@ sqlalchemy
 passlib[bcrypt]
 python-jose[cryptography]
 google-generativeai
+# Required by pydantic's EmailStr (used by user and candidate schemas)
+email-validator
+# Required by FastAPI for multipart form uploads
+python-multipart
+# Resume text extraction (uploads are parsed at upload time)
+pypdf
+python-docx

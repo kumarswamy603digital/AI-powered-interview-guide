@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from statistics import mean
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
-from app.core.report import generate_report
 from app.crud.interview import list_turns
 from app.models.interview import InterviewSession
 from app.schemas.analytics import (
@@ -14,21 +13,35 @@ from app.schemas.analytics import (
 )
 
 
-def _session_report_pair(
-    session: InterviewSession,
-    *,
-    db,
-):
-    turns = list_turns(db, session_id=session.id)
-    transcript = [{"role": t.role, "content": t.content} for t in turns]
-    report = generate_report(
-        interview_id=session.id,
-        target_role=session.target_role,
-        difficulty=session.difficulty,
-        personality_mode=session.personality_mode,
-        transcript=transcript,
-    )
-    return session, turns, report
+def _persisted_skill_scores(session: InterviewSession) -> Dict[str, float]:
+    """
+    Read the scores stored when the interview ended.
+
+    Previously every analytics request regenerated the full report for every
+    session, which meant one Gemini call per session per page load and scores that
+    could change between requests. Sessions that ended before scores were
+    persisted (or that never ended) are skipped rather than re-scored.
+    """
+    result: Dict[str, float] = {}
+    for entry in session.skill_scores or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        raw = entry.get("score")
+        if not name or raw is None:
+            continue
+        try:
+            result[name] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _session_overall(session: InterviewSession) -> Optional[float]:
+    if session.overall_score is not None:
+        return float(session.overall_score)
+    scores = _persisted_skill_scores(session)
+    return mean(scores.values()) if scores else None
 
 
 def build_interview_history(
@@ -59,17 +72,16 @@ def build_skill_progress(
     *,
     db,
 ) -> List[SkillProgressItem]:
-    # Collect scores per skill across sessions
+    # Collect persisted scores per skill across sessions.
     skill_scores: dict[str, List[Tuple[int, float]]] = defaultdict(list)
 
     for session in sessions:
-        _, _, report = _session_report_pair(session, db=db)
-        for skill in report.skill_breakdown:
-            skill_scores[skill.name].append((session.id, skill.score))
+        for name, score in _persisted_skill_scores(session).items():
+            skill_scores[name].append((session.id, score))
 
     items: List[SkillProgressItem] = []
     for name, values in skill_scores.items():
-        # values is list of (interview_id, score) in session order already
+        # values is a list of (interview_id, score) in session order already
         scores = [v[1] for v in values]
         avg = mean(scores)
         latest = scores[-1]
@@ -103,17 +115,16 @@ def build_performance_trends(
     points: List[PerformanceTrendPoint] = []
 
     for session in sessions:
-        _, _, report = _session_report_pair(session, db=db)
-        if not report.skill_breakdown:
+        overall = _session_overall(session)
+        if overall is None:
+            # Not scored yet (still active, or ended before scoring existed).
             continue
-        avg_score = mean(s.score for s in report.skill_breakdown)
         points.append(
             PerformanceTrendPoint(
                 interview_id=session.id,
                 date=session.started_at,
-                average_skill_score=round(avg_score, 2),
+                average_skill_score=round(overall, 2),
             )
         )
 
     return points
-

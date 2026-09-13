@@ -16,6 +16,10 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_superuser = Column(Boolean, default=False, nullable=False)
+    # Platform users are HR staff; candidates are records, not accounts. The
+    # column exists so a future candidate-facing portal can be gated out of the
+    # HR endpoints without another migration.
+    role = Column(String(32), default="hr", nullable=False)  # hr|admin|candidate
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

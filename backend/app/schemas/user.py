@@ -24,6 +24,7 @@ class UserLogin(BaseModel):
 class UserRead(UserBase):
     id: int
     is_superuser: bool
+    role: str = "hr"
     created_at: datetime
     updated_at: datetime
 

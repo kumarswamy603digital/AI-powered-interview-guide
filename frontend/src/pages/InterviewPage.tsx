@@ -1,4 +1,5 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   endLiveInterview,
   LiveInterviewStartResponse,
@@ -6,15 +7,27 @@ import {
   submitLiveAnswer
 } from "../api/interviews";
 import { evaluateAnswer } from "../api/answers";
+import { getJob, getLatestCandidateResume } from "../api/hr";
 import { InterviewerAvatar } from "../components/InterviewerAvatar";
 
 export function InterviewPage() {
+  const [searchParams] = useSearchParams();
+  // When launched from the pipeline, the interview is bound to a candidate and
+  // requisition so its score feeds candidate ranking.
+  const candidateIdParam = searchParams.get("candidate_id");
+  const jobIdParam = searchParams.get("job_id");
+  const candidateId = candidateIdParam ? Number(candidateIdParam) : undefined;
+  const jobRequisitionId = jobIdParam ? Number(jobIdParam) : undefined;
+
   const [session, setSession] = useState<LiveInterviewStartResponse | null>(null);
   const [question, setQuestion] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
   const [persona, setPersona] = useState<"strict" | "friendly" | "stress">("friendly");
   const [targetRole, setTargetRole] = useState<string>("");
+  const [resumeText, setResumeText] = useState("");
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  const [finalScore, setFinalScore] = useState<number | null>(null);
   const [transcript, setTranscript] = useState<
     {
       role: "assistant" | "user";
@@ -23,6 +36,45 @@ export function InterviewPage() {
     }[]
   >([]);
 
+  // Prefill the resume text and role from the stored candidate/requisition
+  // instead of asking the interviewer to paste a resume that is already parsed.
+  useEffect(() => {
+    if (candidateId === undefined) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const resume = await getLatestCandidateResume(candidateId);
+        if (!cancelled) {
+          setResumeText(resume.extracted_text);
+          setPrefillNote(
+            `Loaded parsed resume for candidate #${candidateId} ` +
+              `(${resume.extracted_text.length} characters, ${resume.extracted_skills.length} skills).`
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setPrefillNote(
+            `No parsed resume found for candidate #${candidateId}. Paste the resume text below.`
+          );
+        }
+      }
+
+      if (jobRequisitionId !== undefined) {
+        try {
+          const job = await getJob(jobRequisitionId);
+          if (!cancelled) setTargetRole(job.title);
+        } catch {
+          // Leave the role empty so the interviewer can type it.
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [candidateId, jobRequisitionId]);
+
   async function handleStart(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -30,7 +82,6 @@ export function InterviewPage() {
     const difficulty = (formData.get("difficulty") as "easy" | "medium" | "hard") || "medium";
     const personality =
       (formData.get("personality") as "strict" | "friendly" | "stress") || "friendly";
-    const resumeText = String(formData.get("resumeText") || "");
 
     setLoading(true);
     try {
@@ -40,7 +91,9 @@ export function InterviewPage() {
         resume_text: resumeText,
         target_role: role,
         difficulty,
-        personality_mode: personality
+        personality_mode: personality,
+        candidate_id: candidateId,
+        job_requisition_id: jobRequisitionId
       });
       setSession(res);
       setQuestion(res.first_question);
@@ -89,9 +142,13 @@ export function InterviewPage() {
   async function handleEnd() {
     if (!session) return;
     try {
-      await endLiveInterview(session.id);
-    } catch {
-      // ignore errors for now
+      // The backend scores the interview here and persists it, so the number
+      // shown is the same one the candidate ranking will use.
+      const result = await endLiveInterview(session.id);
+      setFinalScore(result.overall_score ?? null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err);
     } finally {
       setSession(null);
       setQuestion(null);
@@ -115,11 +172,28 @@ export function InterviewPage() {
           </div>
         </div>
 
+        {!session && finalScore !== null && (
+          <div className="notice good">
+            Interview scored {Math.round(finalScore)}/100 and saved
+            {candidateId !== undefined ? " to the candidate record" : ""}.{" "}
+            <Link to="/hr">View the updated ranking</Link>.
+          </div>
+        )}
+
+        {!session && prefillNote && <div className="notice">{prefillNote}</div>}
+
         {!session && (
           <form onSubmit={handleStart} className="stack">
             <div className="input">
               <label htmlFor="targetRole">Target role</label>
-              <input id="targetRole" name="targetRole" required placeholder="e.g. Backend Engineer" />
+              <input
+                id="targetRole"
+                name="targetRole"
+                required
+                placeholder="e.g. Backend Engineer"
+                value={targetRole}
+                onChange={(e) => setTargetRole(e.target.value)}
+              />
             </div>
             <div className="row">
               <div className="input" style={{ flex: 1 }}>
@@ -140,13 +214,17 @@ export function InterviewPage() {
               </div>
             </div>
             <div className="input">
-              <label htmlFor="resumeText">Resume text (paste)</label>
+              <label htmlFor="resumeText">
+                Resume text {candidateId !== undefined ? "(loaded from the parsed resume)" : "(paste)"}
+              </label>
               <textarea
                 id="resumeText"
                 name="resumeText"
                 rows={6}
-                placeholder="Paste your resume text here to personalize the interview..."
+                placeholder="Paste resume text here to personalize the interview..."
                 required
+                value={resumeText}
+                onChange={(e) => setResumeText(e.target.value)}
               />
             </div>
             <button className="btn" type="submit" disabled={loading}>
