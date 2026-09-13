@@ -137,3 +137,39 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+
+# ---------------------------------------------------------------------------
+# Python (the backend). Without these, compiled caches and the local SQLite
+# database get committed - __pycache__/*.pyc previously were.
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local database and uploaded files (runtime artefacts, not source)
+*.db
+*.sqlite
+*.sqlite3
+backend/app.db
+backend/uploads/

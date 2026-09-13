@@ -369,19 +369,22 @@ cross-candidate ranking impossible.
    `scripts/verify_capabilities.py`.
 9. **Single-tenant.** No org isolation, and the HR role gate is permissive (all accounts default
    to `role="hr"`).
-10. **No HTTP-level test suite.** The two harnesses below cover engine behaviour and wiring
-    integrity, not the live request/response cycle.
+10. **`demo.mp4` in the repo root is a 1-byte placeholder** — the demo video is effectively
+    missing from git and needs re-uploading.
 
 ---
 
 ## Verification
 
-Two committed harnesses, both runnable with plain `python` (no pytest, no network):
+Three committed harnesses, all runnable with plain `python` (no pytest, no extra packages):
 
 ```bash
 cd backend
 python scripts/verify_capabilities.py   # 135 behavioural checks across all 8 capabilities
-python scripts/audit_wiring.py          # 16 structural checks on how it is wired together
+python scripts/audit_wiring.py          # 22 structural checks on how it is wired together
+
+# with the server running (see Getting started):
+python scripts/smoke_http.py            # ~130 real HTTP requests, 100% endpoint coverage
 ```
 
 **`verify_capabilities.py`** executes the real engines against fixture data and asserts the
@@ -393,9 +396,19 @@ strong interview answer outscores a fluent off-topic one.
 **`audit_wiring.py`** checks what a server boot would catch: that all 242 internal imports
 resolve, that all 14 dataclass→schema conversions supply every required field, that CRUD and
 model keyword arguments are real columns, that all 34 SQLAlchemy relationships pair up, that no
-route shadows another, and that every router is registered.
+route shadows another, that every router is registered, and — the check that caught two real
+500s — that **no response schema field collides with an ORM relationship or reads a nullable
+JSON column into a non-optional list**.
 
-Both scripts stub only the packages that are genuinely missing, so in a fully installed
+**`smoke_http.py`** is the layer the other two cannot reach: real requests through real
+SQLAlchemy and real pydantic validation. It covers **100% of the capability endpoints** (66 of
+66), including the write paths and the full candidate → hire → onboarding lifecycle, and asserts
+behaviour rather than just status codes (an uncovered policy question must return
+`answered: false`; a strong interview answer must outscore a non-answer; skills must be
+canonicalised on write). Records it creates are prefixed `SMOKE`; it cleans up the policy,
+requirement and skill it adds.
+
+The first two scripts stub only the packages that are genuinely missing, so in a fully installed
 environment they audit the real libraries.
 
 ---

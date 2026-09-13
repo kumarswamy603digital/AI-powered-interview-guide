@@ -8,6 +8,31 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.core.skills import canonical_skill
 
 
+def _as_str_list(value: Any) -> List[str]:
+    """
+    Coerce a value read off an ORM row into a list of strings.
+
+    Two cases this has to survive:
+      * a nullable JSON column that is NULL (rows created without the field) -
+        pydantic rejects None for List[str];
+      * an ORM *relationship* whose attribute name matches the schema field, so
+        the raw value is a list of model instances rather than strings.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    result: List[str] = []
+    for item in value:
+        if isinstance(item, str):
+            result.append(item)
+            continue
+        # EmployeeSkill -> its skill name; anything else falls back to str().
+        name = getattr(item, "skill", None) or getattr(item, "name", None)
+        result.append(str(name) if name is not None else str(item))
+    return result
+
+
 EmployeeStatus = Literal["active", "on_leave", "notice_period", "resigned", "terminated"]
 AttendanceStatus = Literal["present", "remote", "leave", "absent", "holiday"]
 GoalStatus = Literal["not_started", "on_track", "at_risk", "missed", "achieved"]
@@ -72,10 +97,19 @@ class EmployeeRead(EmployeeBase):
     # Derived, not stored.
     tenure_years: Optional[float] = None
     manager_name: Optional[str] = None
+    # NOTE: this name matches the Employee.skills relationship, so validating
+    # straight off an ORM row yields EmployeeSkill instances. The validator below
+    # flattens them to names; without it every employee read raised a
+    # ValidationError.
     skills: List[str] = Field(default_factory=list)
     direct_report_count: int = 0
 
     model_config = {"from_attributes": True}
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _flatten_skills(cls, value: Any) -> List[str]:
+        return _as_str_list(value)
 
 
 class EmployeeFromCandidate(BaseModel):
@@ -168,6 +202,12 @@ class ReviewCreate(BaseModel):
     comments: Optional[str] = None
     promotion_ready: Optional[Literal["yes", "not_yet", "no"]] = None
 
+    @field_validator("strengths", "improvements", mode="before")
+    @classmethod
+    def _null_json_to_list(cls, value: Any) -> List[str]:
+        # These are nullable JSON columns; NULL must read as an empty list.
+        return _as_str_list(value)
+
 
 class ReviewRead(ReviewCreate):
     id: int
@@ -185,6 +225,12 @@ class GoalCreate(BaseModel):
     weight: float = Field(default=1.0, gt=0, le=10)
     due_date: Optional[date] = None
     related_skills: List[str] = Field(default_factory=list)
+
+    @field_validator("related_skills", mode="before")
+    @classmethod
+    def _null_related_skills_to_list(cls, value: Any) -> List[str]:
+        # Nullable JSON column: goals created without related skills read as NULL.
+        return _as_str_list(value)
 
 
 class GoalUpdate(BaseModel):

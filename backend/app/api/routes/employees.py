@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import date, timedelta
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -26,6 +27,7 @@ from app.crud.workforce import (
     delete_employee_skill,
     get_employee,
     latest_onboarding_plan,
+    list_attendance,
     list_departments,
     list_employee_skills,
     list_employees,
@@ -75,7 +77,12 @@ def _to_read(db: Session, employee: Employee) -> EmployeeRead:
 
 def _attendance_summary(db: Session, employee_id: int) -> AttendanceSummaryRead:
     absence, late, overtime = attendance_metrics(db, employee_id)
-    recorded = 0 if absence is None and overtime is None else 1
+    # Actual number of recorded days in the window; this previously reported 0/1,
+    # which read like a day count but was really "any data at all".
+    window_start = date.today() - timedelta(days=ATTENDANCE_WINDOW_DAYS)
+    recorded = len(
+        list_attendance(db, employee_id, since=window_start, limit=ATTENDANCE_WINDOW_DAYS + 10)
+    )
     return AttendanceSummaryRead(
         employee_id=employee_id,
         window_days=ATTENDANCE_WINDOW_DAYS,
