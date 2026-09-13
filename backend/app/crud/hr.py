@@ -63,10 +63,23 @@ def list_jobs(
     return query.order_by(JobRequisition.created_at.desc()).limit(limit).all()
 
 
+_JOB_REQUIRED = {"title", "status", "headcount", "required_skills", "preferred_skills"}
+
+
 def update_job(db: Session, job: JobRequisition, **fields) -> JobRequisition:
+    """
+    Apply a partial update.
+
+    Routes pass `model_dump(exclude_unset=True)`, so a present key means the client
+    sent it. Explicit nulls are applied so nullable fields (department, location,
+    min_years_experience) can be cleared; columns that cannot be null are skipped.
+    """
     for key, value in fields.items():
-        if value is not None and hasattr(job, key):
-            setattr(job, key, value)
+        if not hasattr(job, key):
+            continue
+        if value is None and key in _JOB_REQUIRED:
+            continue
+        setattr(job, key, value)
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -140,10 +153,17 @@ def list_candidates_by_ids(db: Session, candidate_ids: Iterable[int]) -> List[Ca
     return db.query(Candidate).filter(Candidate.id.in_(ids)).all()
 
 
+_CANDIDATE_REQUIRED = {"full_name", "stage"}
+
+
 def update_candidate(db: Session, candidate: Candidate, **fields) -> Candidate:
+    """Partial update; explicit nulls clear nullable fields such as job_requisition_id."""
     for key, value in fields.items():
-        if value is not None and hasattr(candidate, key):
-            setattr(candidate, key, value)
+        if not hasattr(candidate, key):
+            continue
+        if value is None and key in _CANDIDATE_REQUIRED:
+            continue
+        setattr(candidate, key, value)
     db.add(candidate)
     db.commit()
     db.refresh(candidate)

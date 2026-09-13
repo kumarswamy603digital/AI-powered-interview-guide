@@ -43,6 +43,12 @@ class JobRequisitionBase(BaseModel):
     min_years_experience: Optional[float] = Field(default=None, ge=0, le=50)
     headcount: int = Field(default=1, ge=1, le=1000)
 
+    @field_validator("required_skills", "preferred_skills", mode="before")
+    @classmethod
+    def _null_json_to_list(cls, value: Optional[List[str]]) -> List[str]:
+        # JSON columns: a row written without skills reads back as NULL.
+        return list(value) if value else []
+
     @field_validator("required_skills", "preferred_skills", mode="after")
     @classmethod
     def _canonicalise(cls, value: List[str]) -> List[str]:

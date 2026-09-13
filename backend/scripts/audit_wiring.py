@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -675,6 +676,299 @@ if seed:
          "JobRequisition", "InterviewSession"} <= set(owned),
         f"owned: {sorted(owned)}",
     )
+
+
+# --------------------------------------------------------------------------
+# 8. Schema <-> ORM compatibility (model_validate on an ORM row)
+# --------------------------------------------------------------------------
+print()
+print("=" * 74)
+print("8. SCHEMA <-> ORM COMPATIBILITY")
+print("=" * 74)
+
+
+def schema_annotations(module: str, class_name: str) -> Dict[str, str]:
+    """field -> unparsed annotation, following base classes."""
+    tree = FILES.get(module)
+    if tree is None:
+        return {}
+    target = next(
+        (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name), None
+    )
+    if target is None:
+        return {}
+
+    annotations: Dict[str, str] = {}
+    for base in target.bases:
+        if isinstance(base, ast.Name) and base.id != "BaseModel":
+            annotations.update(schema_annotations(module, base.id))
+    for node in target.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            annotations[node.target.id] = ast.unparse(node.annotation)
+    return annotations
+
+
+def before_validated_fields(module: str, class_name: str) -> Set[str]:
+    """Fields covered by a mode='before' validator, following base classes."""
+    tree = FILES.get(module)
+    if tree is None:
+        return set()
+    target = next(
+        (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name), None
+    )
+    if target is None:
+        return set()
+
+    covered: Set[str] = set()
+    for base in target.bases:
+        if isinstance(base, ast.Name) and base.id != "BaseModel":
+            covered |= before_validated_fields(module, base.id)
+
+    for node in target.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            name = getattr(decorator.func, "id", None) or getattr(decorator.func, "attr", None)
+            if name != "field_validator":
+                continue
+            if not any(
+                k.arg == "mode" and isinstance(k.value, ast.Constant) and k.value.value == "before"
+                for k in decorator.keywords
+            ):
+                continue
+            for arg in decorator.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    covered.add(arg.value)
+    return covered
+
+
+# Nullable JSON / relationship info per model.
+MODEL_NULLABLE_JSON: Dict[str, Set[str]] = {}
+MODEL_NULLABLE_COLUMNS: Dict[str, Set[str]] = {}
+for module in MODEL_MODULES:
+    for node in FILES[module].body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        nullable_json: Set[str] = set()
+        nullable_any: Set[str] = set()
+        for item in node.body:
+            if not isinstance(item, ast.Assign) or not isinstance(item.targets[0], ast.Name):
+                continue
+            value = item.value
+            if not isinstance(value, ast.Call):
+                continue
+            if (getattr(value.func, "id", None) or getattr(value.func, "attr", None)) != "Column":
+                continue
+            name = item.targets[0].id
+            is_json = any(getattr(a, "id", None) == "JSON" for a in value.args)
+            nullable = True  # SQLAlchemy default
+            for keyword in value.keywords:
+                if keyword.arg == "nullable" and isinstance(keyword.value, ast.Constant):
+                    nullable = bool(keyword.value.value)
+                if keyword.arg == "primary_key" and isinstance(keyword.value, ast.Constant):
+                    if keyword.value.value:
+                        nullable = False
+            if nullable:
+                nullable_any.add(name)
+                if is_json:
+                    nullable_json.add(name)
+        MODEL_NULLABLE_JSON[node.name] = nullable_json
+        MODEL_NULLABLE_COLUMNS[node.name] = nullable_any
+
+# (schema module, schema class, ORM model) - schemas built via model_validate(orm_row)
+SCHEMA_ORM_PAIRS = [
+    ("app.schemas.workforce", "EmployeeRead", "Employee"),
+    ("app.schemas.workforce", "EmployeeSkillRead", "EmployeeSkill"),
+    ("app.schemas.workforce", "AttendanceRead", "AttendanceRecord"),
+    ("app.schemas.workforce", "ReviewRead", "PerformanceReview"),
+    ("app.schemas.workforce", "GoalRead", "Goal"),
+    ("app.schemas.workforce", "FeedbackRead", "Feedback"),
+    ("app.schemas.workforce", "SkillRequirementRead", "SkillRequirement"),
+    ("app.schemas.hr", "JobRequisitionRead", "JobRequisition"),
+    ("app.schemas.hr", "CandidateRead", "Candidate"),
+    ("app.schemas.resume", "ResumeRead", "Resume"),
+    ("app.schemas.policy", "PolicyRead", "PolicyDocument"),
+    ("app.schemas.policy", "PolicyChunkRead", "PolicyChunk"),
+    ("app.schemas.onboarding", "OnboardingTaskRead", "OnboardingTask"),
+]
+
+collisions: List[str] = []
+null_json: List[str] = []
+null_scalar: List[str] = []
+
+for schema_module, schema_name, model_name in SCHEMA_ORM_PAIRS:
+    annotations = schema_annotations(schema_module, schema_name)
+    if not annotations:
+        collisions.append(f"{schema_module}.{schema_name}: schema not found")
+        continue
+    _all, required = schema_fields(schema_module, schema_name)
+    covered = before_validated_fields(schema_module, schema_name)
+    relationships = set(MODEL_RELATIONSHIPS.get(model_name, {}))
+    nullable_json = MODEL_NULLABLE_JSON.get(model_name, set())
+    nullable_columns = MODEL_NULLABLE_COLUMNS.get(model_name, set())
+
+    for field_name, annotation in annotations.items():
+        if field_name in {"model_config"} or field_name.startswith("_"):
+            continue
+        is_list = annotation.startswith("List[") or annotation.startswith("list[")
+        is_optional = annotation.startswith("Optional[") or "None" in annotation
+
+        # (a) schema field name collides with an ORM relationship -> the raw value
+        #     is a list of model instances, not the declared type.
+        if field_name in relationships and field_name not in covered:
+            collisions.append(
+                f"{schema_name}.{field_name} shadows the {model_name}.{field_name} "
+                f"relationship and has no mode='before' validator"
+            )
+
+        # (b) nullable JSON column read into a non-Optional list -> None fails.
+        if is_list and field_name in nullable_json and field_name not in covered:
+            null_json.append(
+                f"{schema_name}.{field_name} reads nullable JSON column "
+                f"{model_name}.{field_name}; NULL will fail List validation"
+            )
+
+        # (c) required non-Optional scalar backed by a nullable column.
+        if (
+            field_name in required
+            and not is_optional
+            and not is_list
+            and field_name in nullable_columns
+            and field_name not in covered
+        ):
+            null_scalar.append(
+                f"{schema_name}.{field_name} is required but {model_name}.{field_name} is nullable"
+            )
+
+check(
+    f"no schema field shadows an ORM relationship unguarded ({len(SCHEMA_ORM_PAIRS)} schemas)",
+    not collisions,
+    "\n          ".join(collisions[:10]),
+)
+check(
+    "no nullable JSON column feeds an unguarded list field",
+    not null_json,
+    "\n          ".join(null_json[:10]),
+)
+check(
+    "no required scalar field is backed by a nullable column",
+    not null_scalar,
+    "\n          ".join(null_scalar[:10]),
+)
+
+
+# --------------------------------------------------------------------------
+# 9. The HTTP smoke test only calls paths that exist
+# --------------------------------------------------------------------------
+print()
+print("=" * 74)
+print("9. HTTP SMOKE TEST COVERAGE")
+print("=" * 74)
+
+
+def _normalise_path(path: str) -> str:
+    """Strip the query string and reduce every path parameter to a placeholder."""
+    path = path.split("?", 1)[0]
+    return re.sub(r"\{[^}]*\}", "{}", path)
+
+
+def _path_matches(called: str, route: str) -> bool:
+    """
+    Does a called path match a route pattern?
+
+    Segment-wise, where a route parameter matches anything and a call-site
+    placeholder (from an f-string) or a literal value (e.g. '999999',
+    'Kubernetes') both satisfy it.
+    """
+    called_parts = called.strip("/").split("/")
+    route_parts = route.strip("/").split("/")
+    if len(called_parts) != len(route_parts):
+        return False
+    return all(
+        route_part == "{}" or called_part == "{}" or route_part == called_part
+        for route_part, called_part in zip(route_parts, called_parts)
+    )
+
+
+smoke = FILES.get("scripts.smoke_http")
+check("smoke test script parses", smoke is not None)
+
+if smoke:
+    route_keys = {(m, _normalise_path(p)) for m, p, _mod, _rm in ROUTES}
+    route_keys.add(("GET", "/health"))
+
+    called: Set[Tuple[str, str]] = set()
+    for node in ast.walk(smoke):
+        if not isinstance(node, ast.Call):
+            continue
+        func_name = getattr(node.func, "id", None)
+        if func_name not in {"request", "expect_ok"}:
+            continue
+        # request(method, path, ...) / expect_ok(label, method, path, ...)
+        offset = 0 if func_name == "request" else 1
+        if len(node.args) < offset + 2:
+            continue
+        method_node, path_node = node.args[offset], node.args[offset + 1]
+        if not (isinstance(method_node, ast.Constant) and isinstance(method_node.value, str)):
+            continue
+        method = method_node.value.upper()
+
+        if isinstance(path_node, ast.Constant) and isinstance(path_node.value, str):
+            path = path_node.value
+        elif isinstance(path_node, ast.JoinedStr):
+            parts: List[str] = []
+            for value in path_node.values:
+                if isinstance(value, ast.Constant):
+                    parts.append(str(value.value))
+                else:
+                    parts.append("{}")
+            path = "".join(parts)
+        else:
+            continue
+        called.add((method, _normalise_path(path)))
+
+    unknown = sorted(
+        f"{method} {path}"
+        for method, path in called
+        if not any(
+            route_method == method and _path_matches(path, route_path)
+            for route_method, route_path in route_keys
+        )
+    )
+    check(
+        f"all {len(called)} paths called by the smoke test exist in the route table",
+        not unknown,
+        "\n          ".join(unknown[:12]),
+    )
+
+    # Which capability endpoints does the smoke test leave untouched?
+    capability_prefixes = [
+        "/api/employees", "/api/attrition", "/api/performance", "/api/skills",
+        "/api/onboarding", "/api/policies", "/api/candidates", "/api/jobs",
+        "/api/hr", "/api/interviews", "/api/resumes", "/api/attendance",
+    ]
+    relevant = {
+        (m, _normalise_path(p))
+        for m, p, _mod, _rm in ROUTES
+        if any(p.startswith(prefix) for prefix in capability_prefixes)
+    }
+    uncovered = sorted(
+        f"{route_method} {route_path}"
+        for route_method, route_path in relevant
+        if not any(
+            called_method == route_method and _path_matches(called_path, route_path)
+            for called_method, called_path in called
+        )
+    )
+    coverage = (len(relevant) - len(uncovered)) / len(relevant) * 100 if relevant else 0.0
+    print(f"  note: smoke test covers {coverage:.0f}% of capability endpoints "
+          f"({len(relevant) - len(uncovered)}/{len(relevant)})")
+    for path in uncovered:
+        warn(f"not exercised by the smoke test: {path}")
+    check("smoke test covers at least 70% of capability endpoints", coverage >= 70.0,
+          f"{coverage:.0f}%")
 
 
 # --------------------------------------------------------------------------

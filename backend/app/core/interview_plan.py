@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from app.core.config import settings
 from app.schemas.interview_plan import (

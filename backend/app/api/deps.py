@@ -7,7 +7,6 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.security import decode_access_token
 from app.crud.user import get_user_by_email
 from app.db.session import get_db

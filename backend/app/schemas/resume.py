@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ResumeRead(BaseModel):
@@ -25,6 +25,12 @@ class ResumeRead(BaseModel):
     extracted_characters: int = 0
 
     model_config = {"from_attributes": True}
+
+    @field_validator("extracted_skills", mode="before")
+    @classmethod
+    def _null_json_to_list(cls, value: Optional[List[str]]) -> List[str]:
+        # Nullable JSON column: uploads that failed to parse store NULL.
+        return list(value) if value else []
 
 
 class ResumeTextRead(BaseModel):

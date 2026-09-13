@@ -50,10 +50,26 @@ def list_employees(
     return query.order_by(Employee.full_name.asc()).limit(limit).all()
 
 
+# Columns that must always hold a value; an explicit null for these is ignored
+# rather than allowed to fail at the database level.
+_EMPLOYEE_REQUIRED = {"full_name", "department", "job_title", "hire_date", "status"}
+
+
 def update_employee(db: Session, employee: Employee, **fields) -> Employee:
+    """
+    Apply a partial update.
+
+    Callers pass `model_dump(exclude_unset=True)`, so a key being present means the
+    client actually sent it - including an explicit null. Nulls are therefore
+    applied (that is how a nullable field gets cleared), except for columns that
+    cannot be null.
+    """
     for key, value in fields.items():
-        if value is not None and hasattr(employee, key):
-            setattr(employee, key, value)
+        if not hasattr(employee, key):
+            continue
+        if value is None and key in _EMPLOYEE_REQUIRED:
+            continue
+        setattr(employee, key, value)
     db.add(employee)
     db.commit()
     db.refresh(employee)
@@ -253,10 +269,17 @@ def list_goals(db: Session, employee_id: int, *, period: Optional[str] = None) -
     return query.order_by(Goal.due_date.asc().nullslast()).all()
 
 
+_GOAL_REQUIRED = {"title", "status", "progress", "weight", "employee_id"}
+
+
 def update_goal(db: Session, goal: Goal, **fields) -> Goal:
+    """Partial update; explicit nulls clear nullable fields such as due_date."""
     for key, value in fields.items():
-        if value is not None and hasattr(goal, key):
-            setattr(goal, key, value)
+        if not hasattr(goal, key):
+            continue
+        if value is None and key in _GOAL_REQUIRED:
+            continue
+        setattr(goal, key, value)
     db.add(goal)
     db.commit()
     db.refresh(goal)
@@ -405,10 +428,17 @@ def get_onboarding_task(db: Session, task_id: int) -> Optional[OnboardingTask]:
     return db.query(OnboardingTask).filter(OnboardingTask.id == task_id).first()
 
 
+_TASK_REQUIRED = {"title", "phase", "category", "day_offset", "mandatory", "status"}
+
+
 def update_onboarding_task(db: Session, task: OnboardingTask, **fields) -> OnboardingTask:
+    """Partial update; clearing completed_on (null) reopens a task."""
     for key, value in fields.items():
-        if value is not None and hasattr(task, key):
-            setattr(task, key, value)
+        if not hasattr(task, key):
+            continue
+        if value is None and key in _TASK_REQUIRED:
+            continue
+        setattr(task, key, value)
     db.add(task)
     db.commit()
     db.refresh(task)
