@@ -7,12 +7,15 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_optional
 from app.core.live_interview import next_question_gemini, next_question_mock
+from app.core.report import generate_report
+from app.crud.hr import get_candidate, get_job, set_candidate_stage
 from app.crud.interview import (
     add_turn,
     create_session,
     end_session,
     get_session,
     list_turns,
+    save_session_scores,
     set_question_index,
 )
 from app.db.session import get_db
@@ -38,6 +41,19 @@ def start_live_interview(
     db: DbSessionDep,
     user: OptionalUserDep,
 ) -> LiveInterviewStartResponse:
+    # When HR interviews a real candidate, bind the session to that candidate and
+    # requisition so the resulting score can feed the ranking.
+    if payload.candidate_id is not None and get_candidate(db, payload.candidate_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Candidate {payload.candidate_id} not found.",
+        )
+    if payload.job_requisition_id is not None and get_job(db, payload.job_requisition_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job requisition {payload.job_requisition_id} not found.",
+        )
+
     session = create_session(
         db,
         user_id=user.id if user else None,
@@ -45,6 +61,8 @@ def start_live_interview(
         target_role=payload.target_role,
         difficulty=payload.difficulty,
         personality_mode=payload.personality_mode,
+        candidate_id=payload.candidate_id,
+        job_requisition_id=payload.job_requisition_id,
     )
 
     # First question (no last answer yet)
@@ -153,10 +171,50 @@ def end_live_interview(
         session = end_session(db, session)
 
     turns = list_turns(db, session_id=session.id)
+
+    # Score the interview exactly once, here, and persist it. Analytics and
+    # candidate ranking then read a stable number instead of regenerating the
+    # report on every request.
+    if session.scored_at is None:
+        transcript = [{"role": t.role, "content": t.content} for t in turns]
+        report = generate_report(
+            interview_id=session.id,
+            target_role=session.target_role,
+            difficulty=session.difficulty,
+            personality_mode=session.personality_mode,
+            transcript=transcript,
+        )
+        skill_scores = [
+            {"name": s.name, "score": s.score, "comment": s.comment}
+            for s in report.skill_breakdown
+        ]
+        overall = (
+            round(sum(s.score for s in report.skill_breakdown) / len(report.skill_breakdown), 2)
+            if report.skill_breakdown
+            else None
+        )
+        session = save_session_scores(
+            db,
+            session,
+            overall_score=overall,
+            skill_scores=skill_scores,
+            summary=report.summary,
+            strengths=report.strengths,
+            weaknesses=report.weaknesses,
+        )
+
+        # Advance the candidate's pipeline stage once they have been interviewed.
+        if session.candidate_id is not None:
+            candidate = get_candidate(db, session.candidate_id)
+            if candidate is not None and candidate.stage in {"applied", "screened"}:
+                set_candidate_stage(db, candidate, "interviewed")
+
     return LiveInterviewEndResponse(
         id=session.id,
         status=session.status,
         total_turns=len(turns),
         ended_at=session.ended_at.isoformat() if session.ended_at else None,
+        overall_score=session.overall_score,
+        scored=session.scored_at is not None,
     )
 

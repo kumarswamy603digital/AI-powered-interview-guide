@@ -16,6 +16,11 @@ class LiveInterviewStartRequest(BaseModel):
     personality_mode: PersonalityMode = "friendly"
     max_questions: int = Field(default=8, ge=1, le=25)
 
+    # Set when HR interviews a tracked candidate for a specific requisition; the
+    # resulting score then feeds candidate ranking. Omitted for practice sessions.
+    candidate_id: Optional[int] = None
+    job_requisition_id: Optional[int] = None
+
 
 class LiveInterviewStartResponse(BaseModel):
     id: int
@@ -39,4 +44,7 @@ class LiveInterviewEndResponse(BaseModel):
     status: str
     total_turns: int
     ended_at: Optional[str] = None
+    # Scores are computed and persisted when the interview ends.
+    overall_score: Optional[float] = None
+    scored: bool = False
 

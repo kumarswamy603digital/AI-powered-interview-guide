@@ -19,20 +19,37 @@ export function DashboardPage() {
 
         <div className="stack" style={{ marginTop: 24 }}>
           <section>
-            <h2>Live interviews</h2>
-            <p>Start an AI-powered mock interview tailored to your target role.</p>
-            <Link to="/interview">
-              <button className="btn">Start interview</button>
+            <h2>HR intelligence</h2>
+            <p>
+              Rank candidates against a requisition using parsed resumes, stated job
+              requirements and interview scores, with the reasoning behind every
+              recommendation.
+            </p>
+            <Link to="/hr">
+              <button className="btn">Open HR dashboard</button>
             </Link>
           </section>
 
           <section>
-            <h2>Analytics & reports</h2>
-            <p>Coming next: charts for history, skill progress, and performance trends.</p>
+            <h2>Recruitment pipeline</h2>
+            <p>Create requisitions, add candidates and upload resumes for parsing.</p>
+            <Link to="/pipeline">
+              <button className="btn secondary">Manage pipeline</button>
+            </Link>
+          </section>
+
+          <section>
+            <h2>Interviews</h2>
+            <p>
+              Run an AI interview. Launch it from the pipeline to bind the score to a
+              candidate, or start a standalone practice session here.
+            </p>
+            <Link to="/interview">
+              <button className="btn secondary">Start interview</button>
+            </Link>
           </section>
         </div>
       </div>
     </div>
   );
 }
-

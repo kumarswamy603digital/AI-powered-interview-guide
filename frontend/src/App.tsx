@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { HrDashboardPage } from "./pages/HrDashboardPage";
+import { PipelinePage } from "./pages/PipelinePage";
 import { InterviewPage } from "./pages/InterviewPage";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 
@@ -20,6 +22,22 @@ export default function App() {
         }
       />
       <Route
+        path="/hr"
+        element={
+          <ProtectedRoute>
+            <HrDashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pipeline"
+        element={
+          <ProtectedRoute>
+            <PipelinePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/interview"
         element={
           <ProtectedRoute>
@@ -28,8 +46,7 @@ export default function App() {
         }
       />
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/hr" replace />} />
     </Routes>
   );
 }
-

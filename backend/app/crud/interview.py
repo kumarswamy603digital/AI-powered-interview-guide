@@ -16,9 +16,13 @@ def create_session(
     target_role: str,
     difficulty: str,
     personality_mode: str,
+    candidate_id: Optional[int] = None,
+    job_requisition_id: Optional[int] = None,
 ) -> InterviewSession:
     session = InterviewSession(
         user_id=user_id,
+        candidate_id=candidate_id,
+        job_requisition_id=job_requisition_id,
         resume_text=resume_text,
         target_role=target_role,
         difficulty=difficulty,
@@ -89,4 +93,33 @@ def list_sessions_for_user(db: Session, user_id: int) -> list[InterviewSession]:
         .order_by(InterviewSession.started_at.asc())
         .all()
     )
+
+
+def save_session_scores(
+    db: Session,
+    session: InterviewSession,
+    *,
+    overall_score: Optional[float],
+    skill_scores: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+    strengths: Optional[list[str]] = None,
+    weaknesses: Optional[list[str]] = None,
+) -> InterviewSession:
+    """
+    Persist a generated report's scores onto the session.
+
+    Scores used to be recomputed on every analytics request, which meant one
+    Gemini report generation per session per page load and no stable number to
+    rank candidates on.
+    """
+    session.overall_score = overall_score
+    session.skill_scores = skill_scores or []
+    session.report_summary = summary
+    session.report_strengths = strengths or []
+    session.report_weaknesses = weaknesses or []
+    session.scored_at = datetime.utcnow()
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
 

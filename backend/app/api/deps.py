@@ -43,6 +43,27 @@ def get_current_user(
     return user
 
 
+HR_ROLES = {"hr", "admin"}
+
+
+def require_hr_user(
+    current_user: Annotated[object, Depends(get_current_user)],
+):
+    """
+    Gate the HR-facing endpoints (jobs, candidates, ranking, dashboard).
+
+    Platform accounts default to role='hr', so this is permissive today; it exists
+    so a future candidate-facing account cannot read the hiring pipeline.
+    """
+    role = getattr(current_user, "role", None) or "hr"
+    if role not in HR_ROLES and not getattr(current_user, "is_superuser", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint requires an HR role.",
+        )
+    return current_user
+
+
 def get_current_user_optional(
     token: Annotated[Optional[str], Depends(oauth2_scheme_optional)],
     db: Annotated[Session, Depends(get_db)],
