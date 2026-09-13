@@ -323,7 +323,8 @@ Full interactive docs at `/docs`.
 
 **No API key is required** for attrition, performance, skills, onboarding, policy retrieval,
 resume parsing or candidate ranking. Without a key, interview questions come from a built-in
-bank and policy answers are extractive rather than synthesised.
+bank, answer evaluation uses a deterministic heuristic, and policy answers are extractive
+rather than synthesised.
 
 ---
 
@@ -361,10 +362,41 @@ cross-candidate ranking impossible.
 6. **Scanned PDFs yield no text** — no OCR. Affected candidates are flagged, not silently empty.
 7. **Attendance drives burnout signals from overtime hours only**; it has no calendar or
    meeting-load data.
-8. **No automated test suite.** Engines were verified by direct execution against fixture data
-   during development; that harness is not committed.
+8. **Answer evaluation without a Gemini key is lexical.** The fallback scores relevance from
+   question-keyword overlap plus recognised technologies, so an answer using domain synonyms is
+   under-credited on that one dimension. The composite score (relevance 45%, depth 35%, clarity
+   10%, confidence 10%) still ranks answers correctly — see the checks in
+   `scripts/verify_capabilities.py`.
 9. **Single-tenant.** No org isolation, and the HR role gate is permissive (all accounts default
    to `role="hr"`).
+10. **No HTTP-level test suite.** The two harnesses below cover engine behaviour and wiring
+    integrity, not the live request/response cycle.
+
+---
+
+## Verification
+
+Two committed harnesses, both runnable with plain `python` (no pytest, no network):
+
+```bash
+cd backend
+python scripts/verify_capabilities.py   # 135 behavioural checks across all 8 capabilities
+python scripts/audit_wiring.py          # 16 structural checks on how it is wired together
+```
+
+**`verify_capabilities.py`** executes the real engines against fixture data and asserts the
+outputs — per capability, e.g. that a sole-holder-of-a-core-skill insight fires, that an
+uncovered policy question is refused rather than answered, that a resigned employee is excluded
+from skill supply, that sparse data lowers confidence instead of inventing risk, and that a
+strong interview answer outscores a fluent off-topic one.
+
+**`audit_wiring.py`** checks what a server boot would catch: that all 242 internal imports
+resolve, that all 14 dataclass→schema conversions supply every required field, that CRUD and
+model keyword arguments are real columns, that all 34 SQLAlchemy relationships pair up, that no
+route shadows another, and that every router is registered.
+
+Both scripts stub only the packages that are genuinely missing, so in a fully installed
+environment they audit the real libraries.
 
 ---
 
