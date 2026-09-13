@@ -284,8 +284,18 @@ def _market_pull(signals: EmployeeSignals):
     hot = [s for s in skills if s in HOT_MARKET_SKILLS]
     share = len(hot) / len(skills)
     risk = _interpolate(share, ((0.0, 20.0), (0.25, 42.0), (0.5, 62.0), (0.75, 78.0), (1.0, 85.0)))
+
+    # A share computed from two recorded skills is not evidence of high market
+    # pull, it is evidence of a thin skill profile. Damp towards neutral when the
+    # sample is small so sparse data cannot manufacture risk.
+    evidence_weight = min(1.0, len(skills) / 4.0)
+    risk = 30.0 + (risk - 30.0) * evidence_weight
+
     if hot:
-        evidence = f"Holds in-demand skills: {', '.join(hot[:4])}."
+        evidence = f"Holds in-demand skills: {', '.join(hot[:4])}"
+        if evidence_weight < 1.0:
+            evidence += f" (only {len(skills)} skills on record, so this signal is damped)"
+        evidence += "."
     else:
         evidence = "No high-demand skills recorded."
     return risk, evidence
@@ -354,7 +364,13 @@ def _build_actions(factors: List[RiskFactor], risk_score: float) -> List[Retenti
     `expected_risk_reduction` estimates what the overall score would fall by if
     the factor were brought down to a healthy level (risk 25), so HR can
     prioritise by impact rather than by raw factor size.
+
+    Employees in the `low` band get no actions: generating retention work for
+    somebody who is not at risk buries the people who are.
     """
+    if risk_score < BAND_THRESHOLDS[-1][0]:
+        return []
+
     actions: List[RetentionAction] = []
     for factor in factors[:4]:
         if factor.risk < 40.0:
