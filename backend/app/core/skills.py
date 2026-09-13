@@ -248,3 +248,107 @@ def extract_years_experience(text: str) -> Optional[float]:
     if not values:
         return None
     return max(values)
+
+
+
+# --------------------------------------------------------------------------
+# Skill categories
+#
+# Used by the workforce skill graph to suggest reskilling candidates: someone
+# who already works in a category can usually be trained into an adjacent skill
+# in the same category far faster than a new hire can be found.
+# --------------------------------------------------------------------------
+SKILL_CATEGORIES: Dict[str, List[str]] = {
+    "languages": [
+        "Python", "JavaScript", "TypeScript", "Java", "Go", "Rust", "C++", "C#",
+        "Ruby", "PHP", "Swift", "Kotlin", "Scala", "SQL", "R",
+    ],
+    "frontend": [
+        "React", "Angular", "Vue", "Next.js", "HTML/CSS", "Redux",
+    ],
+    "backend": [
+        "FastAPI", "Django", "Flask", "Spring Boot", "Node.js", "Express",
+        "GraphQL", "REST APIs", "gRPC", "Microservices",
+    ],
+    "data_stores": [
+        "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "DynamoDB",
+        "Cassandra", "SQLite", "Snowflake",
+    ],
+    "cloud_infra": [
+        "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "CI/CD",
+        "Linux", "Nginx", "Serverless",
+    ],
+    "data_ml": [
+        "Machine Learning", "TensorFlow", "PyTorch", "scikit-learn", "Pandas",
+        "NumPy", "Spark", "Airflow", "Kafka", "ETL", "Data Analysis",
+        "Power BI", "Tableau", "LLMs", "RAG",
+    ],
+    "practices": [
+        "Git", "Agile/Scrum", "Testing", "System Design", "Observability",
+        "Security", "Project Management",
+    ],
+    "people_hr": [
+        "Communication", "Leadership", "Recruitment", "HRIS", "Payroll",
+        "Onboarding",
+    ],
+}
+
+_SKILL_TO_CATEGORY: Dict[str, str] = {}
+for _category, _skills in SKILL_CATEGORIES.items():
+    for _skill in _skills:
+        _SKILL_TO_CATEGORY[_skill] = _category
+
+
+# Skills with strong external demand. A person holding these has more pull from
+# the market, which the attrition model treats as elevated flight risk rather
+# than as anything about the employee's own intent.
+HOT_MARKET_SKILLS = {
+    "AWS", "Azure", "GCP", "Kubernetes", "Terraform", "Docker",
+    "Machine Learning", "PyTorch", "TensorFlow", "LLMs", "RAG",
+    "Go", "Rust", "TypeScript", "React", "Kafka", "Spark", "Snowflake",
+    "System Design", "Security", "Observability",
+}
+
+
+def category_of(skill: str) -> Optional[str]:
+    """Category for a canonical skill, or None when unknown."""
+    return _SKILL_TO_CATEGORY.get(canonical_skill(skill))
+
+
+def adjacent_skills(skill: str) -> List[str]:
+    """
+    Other skills in the same category.
+
+    Used as a reskilling heuristic: adjacency is not equivalence, so callers
+    should present these as candidates for training, not as substitutes.
+    """
+    category = category_of(skill)
+    if not category:
+        return []
+    canonical = canonical_skill(skill)
+    return [s for s in SKILL_CATEGORIES[category] if s != canonical]
+
+
+def is_hot_market_skill(skill: str) -> bool:
+    return canonical_skill(skill) in HOT_MARKET_SKILLS
+
+
+def skill_overlap_score(skills_a: Iterable[str], skills_b: Iterable[str]) -> float:
+    """
+    Category-aware similarity between two skill sets, 0-100.
+
+    Exact matches count fully; same-category matches count partially, so an
+    employee with adjacent experience scores above one with none.
+    """
+    set_a = {canonical_skill(s) for s in skills_a if s}
+    set_b = {canonical_skill(s) for s in skills_b if s}
+    if not set_b:
+        return 0.0
+
+    exact = set_a & set_b
+    remaining = set_b - exact
+    categories_a = {category_of(s) for s in set_a} - {None}
+    adjacent = {s for s in remaining if category_of(s) in categories_a}
+
+    score = (len(exact) + 0.5 * len(adjacent)) / len(set_b) * 100.0
+    return round(min(100.0, score), 2)

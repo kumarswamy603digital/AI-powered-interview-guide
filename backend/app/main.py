@@ -14,6 +14,13 @@ from app.api.routes.analytics import router as analytics_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.candidates import router as candidates_router
 from app.api.routes.hr_dashboard import router as hr_dashboard_router
+from app.api.routes.employees import router as employees_router
+from app.api.routes.attendance import router as attendance_router
+from app.api.routes.performance import router as performance_router
+from app.api.routes.attrition import router as attrition_router
+from app.api.routes.skill_graph import router as skill_graph_router
+from app.api.routes.onboarding import router as onboarding_router
+from app.api.routes.policies import router as policies_router
 from app.core.config import settings
 from app.core.errors import (
     http_exception_handler,
@@ -65,6 +72,14 @@ def create_application() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(candidates_router)
     app.include_router(hr_dashboard_router)
+    # Workforce intelligence
+    app.include_router(employees_router)
+    app.include_router(attendance_router)
+    app.include_router(performance_router)
+    app.include_router(attrition_router)
+    app.include_router(skill_graph_router)
+    app.include_router(onboarding_router)
+    app.include_router(policies_router)
 
     # Health endpoint
     @app.get("/health", tags=["health"])

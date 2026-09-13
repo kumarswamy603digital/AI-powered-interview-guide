@@ -1,10 +1,10 @@
-# 🧠 AI HR Recruitment Intelligence
+# 🧠 AI Workforce Intelligence Platform
 
-**An HR platform that reasons over multiple recruitment data sources and recommends actions.**
+**An AI-driven workforce management platform that reasons over multiple HR data sources and recommends actions.**
 
-Given a job requisition, a candidate's parsed resume, and their interview performance, the
-system produces a ranked shortlist where every recommendation carries the reasoning that
-produced it.
+Eight HR capabilities on one shared workforce data model — recruitment, onboarding, policy,
+attrition, performance, skills, interviewing and decision support. Every recommendation the
+system makes carries the evidence that produced it.
 
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![React](https://img.shields.io/badge/React-18.2-blue)
@@ -12,161 +12,181 @@ produced it.
 
 ---
 
-## Live deployment
+## Contents
 
-👉 [Live demo](https://chowdary1-ai-interviewer-version-1.hf.space/login)
-
-> Note: the hosted build may lag behind `main`.
-
----
-
-## 📋 Contents
-
-- [What it does](#what-it-does)
-- [How the ranking works](#how-the-ranking-works)
-- [Feature status](#feature-status)
+- [Track 1 capability coverage](#track-1-capability-coverage)
+- [The core idea: cross-source reasoning](#the-core-idea-cross-source-reasoning)
+- [How each engine works](#how-each-engine-works)
 - [Architecture](#architecture)
 - [Getting started](#getting-started)
-- [Environment variables](#environment-variables)
-- [API reference](#api-reference)
 - [Demo walkthrough](#demo-walkthrough)
+- [API reference](#api-reference)
+- [Environment variables](#environment-variables)
+- [Design decisions](#design-decisions)
 - [Known limitations](#known-limitations)
 
 ---
 
-## What it does
+## Track 1 capability coverage
 
-Most recruitment tooling scores one thing at a time: a resume, or an interview. The problem
-is that those signals disagree, and the disagreement is the most useful information an HR
-team has. This platform's core is a **ranking engine that joins three independent sources**:
+| # | Capability | Status | Where |
+|---|---|---|---|
+| 1 | **AI Recruitment Intelligence Engine** — ranks candidates using resumes, job requirements and skill relevance | ✅ | `core/ranking.py` · `POST /api/candidates/rank` · `/recruitment` |
+| 2 | **Adaptive Onboarding Agent** — personalised journeys by role, department and employee profile | ✅ | `core/onboarding_agent.py` · `POST /api/onboarding/generate` · `/onboarding` |
+| 3 | **HR Policy Reasoning Agent** — contextual, source-backed policy answers | ✅ | `core/policy_qa.py` · `POST /api/policies/ask` · `/policies` |
+| 4 | **Employee Attrition Prediction** — flight risk from workforce patterns and engagement signals | ✅ | `core/attrition.py` · `GET /api/attrition` · `/attrition` |
+| 5 | **AI Performance Intelligence** — goals, feedback and history → strengths and improvement areas | ✅ | `core/performance_intel.py` · `GET /api/performance/insights` · `/performance` |
+| 6 | **Workforce Skill Graph** — employee skills against current *and future* requirements | ✅ | `core/skill_graph.py` · `GET /api/skills/graph` · `/skills` |
+| 7 | **Intelligent Interview Agent** — role-specific questions, response evaluation, structured insights | ✅ | `core/interview_plan.py`, `live_interview.py`, `report.py` · `/interview` |
+| 8 | **HR Decision Dashboard** — recruitment, attendance, performance and workforce data → actionable insights | ✅ | `core/decision_dashboard.py` · `GET /api/hr/decision-dashboard` · `/hr` |
 
-```
-   Job requisition            Parsed resume            Interview transcript
- (required skills,        (skills, years of         (per-skill scores from
-  min experience)           experience)              the AI interviewer)
-        │                        │                          │
-        └────────────────────────┼──────────────────────────┘
-                                 ▼
-                    Skill match · Experience match · Interview performance
-                                 ▼
-                    Weighted score + cross-source conflict detection
-                                 ▼
-              Recommend hire / Advance / Further assessment / Reject
-                        + the reasoning behind it
-```
-
-The output HR acts on is not a chat reply — it is a ranked list with matched skills, missing
-skills, a recommendation, and an auditable explanation per candidate.
-
-### Why this is not a chatbot
-
-Recommendations are produced by **deterministic, explainable logic** (`backend/app/core/ranking.py`),
-not by an LLM. The same inputs always produce the same recommendation, and every number can be
-traced to the input that produced it. The LLM is used where generation is genuinely needed:
-producing interview questions and grading answers.
+> **The challenge:** *"reason over multiple HR data sources and recommend actions, rather than
+> building a simple HR chatbot."* That is what section 8 is for, and it is the reason the other
+> seven share one data model instead of being seven separate tools.
 
 ---
 
-## How the ranking works
+## The core idea: cross-source reasoning
 
-**Signals and weights** (renormalised over whatever is available, so a candidate who has not
-interviewed yet is not penalised for the missing score):
+Any one of these capabilities can be built in isolation. The interesting output appears when
+they are correlated — findings that **no single source can produce**:
 
-| Signal | Weight | Source |
-|---|---|---|
-| Skill match | 45% | required skills vs parsed resume |
-| Experience match | 20% | candidate record, or years parsed from the resume |
-| Interview performance | 35% | persisted per-skill interview scores |
+```
+attrition risk  ×  skill graph      →  "Ravi is a flight risk AND the only person
+                                        qualified on Kubernetes"        [critical]
 
-**Gate:** if fewer than 50% of required skills are evidenced, the candidate is rejected
-regardless of the blended score — a strong interview cannot mask missing mandatory skills.
+attrition risk  ×  performance      →  "High performer at risk — this is regretted
+                                        attrition if it happens"        [critical]
 
-**Cross-source flags** — the signals that only exist because multiple sources are combined:
+skill graph     ×  requisitions     →  "Security is a critical gap and no open
+                                        requisition even mentions it"   [critical]
 
-| Flag | Meaning | Effect |
-|---|---|---|
-| `resume_interview_mismatch` | ≥75% skill match but interview < 55 | caps recommendation at *further assessment* |
-| `outperformed_resume` | ≤50% skill match but interview ≥ 80 | resume likely understates the candidate |
-| `partial_skill_gap` | some required skills missing | surfaced as a gap, not a rejection |
-| `no_resume_text` | resume never parsed | lowers confidence, warns in the response |
+candidate rank  ×  skill graph      →  "This candidate would close the ML gap —
+                                        prioritise them"             [opportunity]
 
-Confidence is `high` only when all three signals are present and do not conflict.
+attendance      ×  attrition        →  "10.5h/week overtime alongside a 64/100
+                                        flight risk score"              [warning]
+
+performance     ×  attrition        →  "Promotion-ready but 43 months stagnant"  [warning]
+
+resume          ×  interview score  →  "Matches on paper, interviewed at 43/100"  [warning]
+```
+
+Each insight on `/hr` states **its sources**, **its evidence** and **the action it implies**,
+so a reviewer can audit where it came from. The dashboard is a decision surface, not a chat log.
 
 ---
 
-## Feature status
+## How each engine works
 
-### Implemented
+### Attrition prediction — 9 weighted signals
 
-| Area | What works |
-|---|---|
-| **Job requisitions** | Create/list/update roles with required skills, preferred skills, minimum experience |
-| **Candidate records** | Candidates as HR-managed records (separate from login accounts), pipeline stages |
-| **Resume parsing** | PDF/DOCX/TXT text extraction at upload time, with skill detection |
-| **Skill matching** | 78 canonical skills / 187 aliases (`k8s`→Kubernetes, `postgres`→PostgreSQL, `c++` handled) |
-| **Candidate ranking** | `POST /api/candidates/rank` — multi-source scoring, recommendations, reasoning |
-| **Candidate profile** | Resume + job match + interviews + recommendation in one response |
-| **HR dashboard** | Pipeline counts, aggregated skill gaps, recommended actions |
-| **Interview agent** | AI-generated plan, dynamic questions, follow-ups, answer evaluation, live session |
-| **Score persistence** | Interview scores computed once at end-of-interview and stored |
-| **ATS scoring** | Resume-vs-role scoring against a stored resume or requisition |
-| **Auth** | JWT signup/login, bcrypt hashing, HR-role gate on HR endpoints |
+| Signal | Weight | Signal | Weight |
+|---|---|---|---|
+| Career stagnation | 20% | Workload (overtime) | 10% |
+| Engagement | 16% | Attendance pattern | 8% |
+| Compensation position | 14% | Team attrition contagion | 5% |
+| Performance trend | 12% | External market pull | 5% |
+| Tenure stage | 10% | | |
 
-### Not implemented
+- Weights **renormalise** over available signals — missing data lowers *confidence*, it does not invent risk.
+- **Approved leave never counts** towards absence risk.
+- Detects the classic underpaid high performer (rating ≥ 4 with compa-ratio < 0.97).
+- Every factor maps to a retention action with an **estimated risk reduction**, so HR can prioritise by impact.
 
-Deliberately out of scope — the goal was depth on recruitment intelligence rather than
-breadth across the whole employee lifecycle:
+### Performance intelligence
 
-- Onboarding journeys, attrition prediction, policy reasoning, performance reviews
-- Real camera/microphone analysis (no speech, emotion or body-language inference)
-- Multi-language support (English only)
-- Automated tests
+Themes are extracted from feedback and review text across 9 dimensions (communication,
+leadership, technical depth, delivery, quality, …) with a sentiment lexicon that handles
+negation (*"not clear"* reads negative). Combines goal attainment (40%), latest rating (40%) and
+feedback sentiment (20%), calibrates against the department average, and infers promotion
+readiness — deferring to an explicit manager judgement when one exists.
+
+### Workforce skill graph
+
+Supply (employees, weighted by proficiency and verification) against demand split into
+**current** and **future** horizons. Surfaces coverage %, gaps, **single points of failure**
+(one qualified holder of a core skill), and **reskilling candidates** found via skill-category
+adjacency — so the answer to a gap can be *train* rather than *hire*.
+
+### Adaptive onboarding
+
+Layers a base compliance journey with department, seniority, work-mode, location and
+employment-type playbooks, then adds **targeted training for the employee's own skill gaps**
+against their role's requirements. Every task carries a `rationale` explaining why it is in
+*this* person's plan. A senior remote engineer and a junior onsite intern get materially
+different journeys.
+
+### Policy reasoning
+
+IDF-weighted retrieval over policy **sections** (not whole documents), with query expansion
+(`vacation` → `annual leave`) and stemming (`submit` matches `submitted`). Answers cite the
+exact clause, version and effective date. **It refuses when no policy covers the question** and
+escalates to a human — a wrong answer about notice period is worse than no answer. Passing an
+`employee_id` scopes the answer and raises a caveat when a policy targets a different population.
 
 ---
 
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│ Frontend — React + Vite                                       │
-│  /hr         HR intelligence dashboard (ranking + insights)   │
-│  /pipeline   Requisitions, candidates, resume upload          │
-│  /interview  Live AI interview (bindable to a candidate)      │
-└───────────────────────────────────────────────────────────────┘
-                              │ REST
-┌───────────────────────────────────────────────────────────────┐
-│ Backend — FastAPI                                             │
-│                                                               │
-│  routes/      jobs · candidates · hr_dashboard · resumes      │
-│               interviews_live · answers · reports · analytics │
-│                                                               │
-│  core/        ranking.py         deterministic scoring        │
-│               skills.py          extraction + matching        │
-│               resume_text.py     PDF/DOCX/TXT parsing         │
-│               hr_intelligence.py DB → ranking assembly        │
-│               interview_plan · live_interview · report  (LLM) │
-│                                                               │
-│  models/      users · candidates · job_requisitions           │
-│               resumes · interview_sessions · interview_turns  │
-└───────────────────────────────────────────────────────────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    │  Google Gemini    │  (optional — deterministic
-                    │  question gen,    │   fallbacks are used when
-                    │  evaluation,      │   no API key is configured)
-                    │  reports          │
-                    └───────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ Frontend — React + Vite                                              │
+│  /hr          Decision dashboard (cross-source insights)             │
+│  /recruitment Candidate ranking      /people   Directory + 360 view  │
+│  /attrition   Risk + retention       /performance  Strengths/gaps    │
+│  /skills      Skill graph            /onboarding   Journeys          │
+│  /policies    Policy Q&A             /interview    Interview agent   │
+└──────────────────────────────────────────────────────────────────────┘
+                                  │ REST
+┌──────────────────────────────────────────────────────────────────────┐
+│ Backend — FastAPI                                                    │
+│                                                                      │
+│  core/  decision_dashboard.py   cross-source insight derivation      │
+│         attrition.py            9-signal flight risk                 │
+│         performance_intel.py    themes, trajectory, calibration      │
+│         skill_graph.py          supply vs current/future demand      │
+│         onboarding_agent.py     personalised 30/60/90 journeys       │
+│         policy_qa.py            retrieval + citations + refusal       │
+│         ranking.py              candidate scoring                    │
+│         skills.py               78 skills, 187 aliases, categories   │
+│         workforce_intelligence.py   DB → engine input assembly       │
+│                                                                      │
+│  models/ employees · employee_skills · attendance · reviews · goals  │
+│          feedback · skill_requirements · policies · onboarding       │
+│          candidates · job_requisitions · resumes · interviews        │
+└──────────────────────────────────────────────────────────────────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │  Google Gemini (optional)  │  interview questions,
+                    │  Deterministic fallbacks   │  answer evaluation,
+                    │  everywhere else           │  policy synthesis
+                    └────────────────────────────┘
 ```
+
+**The analytics engines never call an LLM.** Attrition, performance, skills, onboarding and
+policy retrieval are deterministic, so the same data always yields the same recommendation and
+every number traces to its input. Gemini is used where generation is genuinely needed.
 
 ### Data model
 
 ```
 JobRequisition ──< Candidate ──< Resume            (parsed text + skills)
+                        │  └──< InterviewSession   (persisted scores)
                         │
-                        └──< InterviewSession ──< InterviewTurn
-                                    │
-                                    └── overall_score, skill_scores  (persisted at end)
+                        └── hired ──> Employee     ← skills carry across
+                                         │
+        ┌────────────────┬───────────────┼──────────────┬───────────────┐
+   EmployeeSkill   AttendanceRecord  PerformanceReview  Goal        Feedback
+                                                        │
+                        OnboardingPlan ──< OnboardingTask
+                        SkillRequirement (current | future)
+                        PolicyDocument ──< PolicyChunk  (citable sections)
 ```
+
+`Candidate → Employee` closes the lifecycle loop: skills evidenced during hiring become
+verified employee skills, feeding the workforce skill graph instead of being discarded at offer
+stage.
 
 ---
 
@@ -174,27 +194,25 @@ JobRequisition ──< Candidate ──< Resume            (parsed text + skills
 
 ### Prerequisites
 
-- Python 3.10+ (the config module uses `str | None` syntax)
-- Node.js 18+
+Python 3.10+ (the config module uses `str | None`), Node.js 18+.
 
 ### Backend
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env                              # optional; defaults work
 
-# Optional: configure AI + secrets
-cp .env.example .env            # then edit
+# Load the demo organisation — do this before opening the UI
+python -m scripts.seed_demo --reset
 
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-> **Schema changes require a fresh database.** The app uses
-> `Base.metadata.create_all()` with no migration tool, so it creates missing *tables* but
-> not missing *columns*. If you are upgrading an existing install, delete `backend/app.db`
-> (or point `DATABASE_URL` at a new database) before starting.
+> **Schema changes require a fresh database.** The app uses `Base.metadata.create_all()` with no
+> migration tool: it creates missing *tables* but not missing *columns*. Upgrading an existing
+> install? Delete `backend/app.db` first (`--reset` on the seed script does not add columns).
 
 ### Frontend
 
@@ -204,8 +222,89 @@ npm install
 npm run dev
 ```
 
-- Frontend: http://localhost:5173
-- API docs: http://localhost:8000/docs
+Frontend `http://localhost:5173` · API docs `http://localhost:8000/docs`
+
+### Seeded demo login
+
+```
+hr@demo.local  /  DemoHr!2026
+```
+
+The seed script creates 22 employees across 5 departments plus 3 leavers (who drive the
+department attrition-rate signal), ~2,730 attendance day records, 22 performance reviews, 24
+goals, 20 feedback notes, 22 skill requirements of which 5 are future-facing, 6 policies split
+into citable sections, 2 requisitions, 5 candidates with parsed resumes, and 3 scored
+interviews. Values are deterministic — two runs produce identical numbers.
+
+---
+
+## Demo walkthrough
+
+The seed data is shaped to make the cross-source reasoning visible, not to look tidy.
+
+1. **`/hr` — decision dashboard.** Start here. The insight list is ordered by severity; the top
+   entries are the cross-source findings.
+2. **Ravi Menon** appears three times: high flight risk (64/100), a high performer (4.6/5), and
+   the only Kubernetes holder. Three sources, one conclusion — act now.
+3. **`/attrition` → "Explain"** on Ravi. Nine factors with weights, contributions and evidence.
+   The compensation row reads *"High performer paid below midpoint"* because the model
+   cross-references rating with compa-ratio.
+4. **`/skills`** → filter **Future requirements**. Machine Learning and LLMs are critical gaps
+   with **zero** qualified holders — and Arjun Das is surfaced as the reskilling candidate
+   because he already works in the same skill category.
+5. **`/recruitment`** → rank the ML requisition. **Divya Suresh** matches and already holds
+   LLMs/RAG; the dashboard flags that hiring her closes a known workforce gap. **Rohan Gupta**
+   matches 100% on paper but interviewed at 43/100 → capped at *further assessment*.
+6. **`/onboarding`** → preview a journey for **Nisha Verma** (senior, remote, Bengaluru). Note
+   the targeted training for FastAPI/Kubernetes/AWS — added because *she* lacks them — and the
+   "what was tailored and why" list.
+7. **`/policies`** → ask *"How many annual leave days can I carry forward?"* → answer with the
+   exact clause cited. Then ask *"What is the policy on cryptocurrency trading?"* → **explicit
+   refusal**, escalated to HR, rather than a fabricated answer.
+
+---
+
+## API reference
+
+### Decision support
+```
+GET  /api/hr/decision-dashboard    Combined view + cross-source insights
+GET  /api/hr/dashboard             Recruitment-only pipeline view
+```
+
+### Workforce
+```
+POST/GET/PATCH /api/employees          Employee records
+GET  /api/employees/{id}/360           Everything about one person
+POST /api/employees/from-candidate     Hire a candidate → employee (+ onboarding plan)
+POST/GET /api/employees/{id}/skills    Skill profile
+POST /api/attendance · /api/attendance/bulk · GET /api/attendance/{id}
+```
+
+### Intelligence
+```
+GET  /api/attrition                    Whole-workforce risk + org drivers
+GET  /api/attrition/employees/{id}     One assessment with factors and actions
+GET  /api/attrition/model              Signals, weights and bands (auditable)
+GET  /api/performance/insights         Strengths, gaps, trajectory, calibration
+POST /api/performance/reviews · /goals · /feedback
+GET  /api/skills/graph                 Nodes, edges and summary
+GET  /api/skills/gaps                  Under-covered skills only
+POST/GET /api/skills/requirements      Demand side (current | future)
+```
+
+### Agents
+```
+POST /api/onboarding/generate          Personalised journey (persist or preview)
+GET  /api/onboarding/plans             Active plans with progress
+PATCH /api/onboarding/tasks/{id}       Complete a task
+POST /api/policies · GET /api/policies Policy library (auto-sectioned)
+POST /api/policies/ask                 Source-backed answer or refusal
+POST /api/candidates/rank              Candidate ranking
+POST /api/interviews/live/start · /{id}/submit · /{id}/end
+```
+
+Full interactive docs at `/docs`.
 
 ---
 
@@ -214,137 +313,58 @@ npm run dev
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./app.db` | Database connection string |
-| `SECRET_KEY` | `CHANGE_ME_...` | JWT signing secret — **must** be changed for production |
+| `SECRET_KEY` | `CHANGE_ME_...` | JWT signing secret — **must** change for production |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token lifetime |
-| `GEMINI_API_KEY` | _none_ | Enables AI question generation, evaluation and reports |
+| `GEMINI_API_KEY` | _none_ | Enables interview generation, evaluation, policy synthesis |
 | `GEMINI_MODEL` | `models/gemini-1.5-pro` | Gemini model name |
-| `RESUME_UPLOAD_DIR` | `uploads/resumes` | Where uploaded resumes are stored |
-| `RESUME_MAX_SIZE_MB` | `10` | Upload size limit |
-| `BACKEND_CORS_ORIGINS` | localhost dev origins | Allowed CORS origins |
-| `ENVIRONMENT` | `local` | `local` enables debug + dev CORS defaults |
+| `RESUME_UPLOAD_DIR` | `uploads/resumes` | Resume storage |
+| `RESUME_MAX_SIZE_MB` | `10` | Upload limit |
+| `BACKEND_CORS_ORIGINS` | localhost dev | Allowed origins |
 
-Without `GEMINI_API_KEY` the system still runs end to end: interview questions come from a
-built-in bank and reports use deterministic placeholder scoring. **Ranking, skill matching and
-resume parsing never require an API key.**
-
-Generate a secret:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+**No API key is required** for attrition, performance, skills, onboarding, policy retrieval,
+resume parsing or candidate ranking. Without a key, interview questions come from a built-in
+bank and policy answers are extractive rather than synthesised.
 
 ---
 
-## API reference
+## Design decisions
 
-### HR intelligence
+**Why the analytics are not LLM-based.** A retention recommendation gets discussed with an
+employee's manager; a policy answer affects someone's leave entitlement. Both must be
+reproducible and auditable. Deterministic scoring also means the demo behaves identically
+without an API key, and every score can be traced to the input that produced it.
 
-```
-POST   /api/jobs                        Create a requisition (title, required_skills, ...)
-GET    /api/jobs                        List requisitions (?status=open)
-GET    /api/jobs/{id}                   Read a requisition
-PATCH  /api/jobs/{id}                   Update a requisition
+**Why the policy agent refuses.** Retrieval below a relevance floor, or covering less than a
+third of the question's terms, returns `answered: false` with an escalation instead of a guess.
+Confident fabrication is the failure mode that makes HR tools unusable.
 
-POST   /api/candidates                  Create a candidate
-GET    /api/candidates                  List candidates (?job_requisition_id, ?stage)
-GET    /api/candidates/{id}             Read a candidate
-PATCH  /api/candidates/{id}             Update a candidate (incl. pipeline stage)
-GET    /api/candidates/{id}/profile     Candidate intelligence profile
-POST   /api/candidates/rank             Rank candidates for a requisition  ★
+**Why skill demand has two horizons.** Current gaps are a hiring problem; future gaps are a
+training problem, and they need to be visible *before* they become vacancies.
 
-GET    /api/hr/dashboard                Pipeline, skill gaps, recommended actions
-```
-
-★ The core endpoint. Example:
-
-```bash
-curl -X POST localhost:8000/api/candidates/rank \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"job_requisition_id": 1}'
-```
-
-```jsonc
-{
-  "job_title": "Senior Backend Engineer",
-  "candidates_evaluated": 4,
-  "rankings": [{
-    "full_name": "Anita Rao",
-    "final_score": 96.05,
-    "skill_match_score": 100.0,
-    "experience_match_score": 96.0,
-    "interview_score": 91.0,
-    "matched_skills": ["Python", "FastAPI", "PostgreSQL", "Kubernetes", "AWS"],
-    "missing_skills": [],
-    "recommendation": "recommend_hire",
-    "confidence": "high",
-    "data_sources": ["job_requirements", "resume", "interview", "candidate_record"],
-    "reasoning": [
-      "Matched 5 of 5 required skills (100%): Python, FastAPI, PostgreSQL, Kubernetes, AWS.",
-      "8 years experience vs 5 required.",
-      "Interview score 91/100 — System design 94, Problem solving 88."
-    ]
-  }],
-  "skill_gaps": [{"skill": "Kubernetes", "candidates_missing": 2}],
-  "warnings": []
-}
-```
-
-### Resumes, interviews, auth
-
-```
-POST   /api/resumes/upload                        Upload + parse (multipart: file, candidate_id)
-GET    /api/resumes                               List your uploads
-GET    /api/resumes/{id}/text                     Extracted text + skills
-GET    /api/resumes/candidates/{id}/latest        Latest parsed resume for a candidate
-
-POST   /api/ats/score                             Score a resume (text, resume_id or candidate_id)
-POST   /api/interviews/plan/generate              Generate an interview plan
-POST   /api/interviews/live/start                 Start (optionally candidate_id + job_requisition_id)
-POST   /api/interviews/live/{id}/submit           Submit an answer, get the next question
-POST   /api/interviews/live/{id}/end              End, score and persist  ★
-POST   /api/answers/evaluate                      Evaluate a single answer
-GET    /api/reports/{interview_id}                Interview report
-GET    /api/analytics/skills/progress             Skill progress (reads persisted scores)
-
-POST   /api/auth/signup · /api/auth/login · GET /api/auth/me
-```
-
-Full interactive docs at `/docs`.
-
----
-
-## Demo walkthrough
-
-1. **Sign up** and land on the HR dashboard (`/hr`).
-2. **Create a requisition** in `/pipeline` — e.g. *Senior Backend Engineer*, required skills
-   `Python, FastAPI, PostgreSQL, Kubernetes, AWS`, minimum 5 years.
-3. **Add candidates** with resume files. Parsed skills appear immediately in the candidate table.
-4. **Rank** on `/hr` — candidates are ordered by role match, each with matched/missing skills.
-   Click **Why?** to see the weighting and the reasoning.
-5. **Interview** a candidate from the pipeline. The resume text is prefilled from the parsed
-   file. On completion the score is persisted and the ranking updates — candidates whose
-   interview contradicts their resume are flagged.
-
-The most convincing part of the demo is step 5 on a strong-resume/weak-interview candidate:
-the recommendation drops to *further assessment* and states why.
+**Why candidates and employees are separate entities.** Candidates are records HR manages;
+employees are the workforce. Conflating them (and with login accounts) is what previously made
+cross-candidate ranking impossible.
 
 ---
 
 ## Known limitations
 
-1. **No migrations.** Schema changes need the SQLite file recreated (see above).
-2. **Scanned PDFs yield no text.** There is no OCR; extraction status is recorded as `empty`
-   and the affected candidates are flagged `no_resume_text` with a dashboard warning.
-3. **Skill vocabulary is finite.** 78 canonical skills with 187 aliases; unknown requirements
-   are still matched by literal text search, but without alias awareness.
-4. **Interview scoring quality depends on Gemini.** Without an API key, reports fall back to
-   fixed placeholder scores, so rankings will show identical interview scores.
-5. **HR role gate is permissive.** All accounts default to `role="hr"`; the gate exists so a
-   future candidate-facing portal can be excluded from the pipeline endpoints.
-6. **No automated tests.**
-7. **Ranking assumes one requisition per candidate.** Candidates can be ranked against any
-   job, but each holds a single `job_requisition_id`; a full many-to-many application model
-   would be the next step.
+1. **No migrations.** Schema changes need the SQLite file recreated.
+2. **Attrition is not a trained model.** There is no historical exit dataset here; it is an
+   expert-weighted signal model. The weights are asserted, not learned — `GET /api/attrition/model`
+   exposes them precisely so they can be challenged and tuned.
+3. **Sentiment is lexicon-based.** It handles negation but not sarcasm or comparatives.
+4. **Policy retrieval is lexical, not semantic.** IDF + synonyms + stemming, no embeddings, so a
+   question sharing no vocabulary with the policy may be refused rather than answered.
+5. **Reskilling adjacency is a heuristic.** Same-category skills are training candidates, not
+   equivalents.
+6. **Scanned PDFs yield no text** — no OCR. Affected candidates are flagged, not silently empty.
+7. **Attendance drives burnout signals from overtime hours only**; it has no calendar or
+   meeting-load data.
+8. **No automated test suite.** Engines were verified by direct execution against fixture data
+   during development; that harness is not committed.
+9. **Single-tenant.** No org isolation, and the HR role gate is permissive (all accounts default
+   to `role="hr"`).
 
 ---
 
