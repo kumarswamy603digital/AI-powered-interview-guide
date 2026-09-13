@@ -9,15 +9,35 @@ never get a table.
 
 from app.models.hr import Candidate, JobRequisition
 from app.models.interview import InterviewSession, InterviewTurn
+from app.models.onboarding import OnboardingPlan, OnboardingTask
+from app.models.performance import Feedback, Goal, PerformanceReview
+from app.models.policy import PolicyChunk, PolicyDocument
 from app.models.resume import Resume
 from app.models.user import User
+from app.models.workforce import (
+    AttendanceRecord,
+    Employee,
+    EmployeeSkill,
+    SkillRequirement,
+)
 
 
 __all__ = [
+    "AttendanceRecord",
     "Candidate",
+    "Employee",
+    "EmployeeSkill",
+    "Feedback",
+    "Goal",
     "InterviewSession",
     "InterviewTurn",
     "JobRequisition",
+    "OnboardingPlan",
+    "OnboardingTask",
+    "PerformanceReview",
+    "PolicyChunk",
+    "PolicyDocument",
     "Resume",
+    "SkillRequirement",
     "User",
 ]

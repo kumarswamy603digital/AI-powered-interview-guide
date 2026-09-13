@@ -5,13 +5,17 @@ from typing import Annotated, Dict, List
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from dataclasses import asdict
+
 from app.api.deps import require_hr_user
+from app.core.decision_dashboard import build_decision_dashboard
 from app.core.hr_intelligence import rank_candidates_for_job
 from app.core.ranking import CandidateRanking, aggregate_skill_gaps
 from app.crud.hr import list_candidates, list_jobs
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.hr import HrDashboardRead, PipelineCounts, SkillGapRead
+from app.schemas.workforce import DecisionDashboardRead
 
 
 router = APIRouter(prefix="/api/hr", tags=["hr-dashboard"])
@@ -160,3 +164,17 @@ def hr_dashboard(
             missing_resume_text=missing_resume_text,
         ),
     )
+
+
+
+@router.get("/decision-dashboard", response_model=DecisionDashboardRead)
+def decision_dashboard(db: DbSessionDep, hr_user: HrUserDep) -> DecisionDashboardRead:
+    """
+    The combined HR decision view: recruitment, attendance, performance,
+    attrition and skill data in one response, plus insights derived by
+    correlating those sources against each other.
+
+    Each insight lists the sources it came from, so a reviewer can audit it.
+    """
+    dashboard = build_decision_dashboard(db)
+    return DecisionDashboardRead.model_validate(asdict(dashboard))
